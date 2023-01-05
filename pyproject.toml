@@ -1,0 +1,119 @@
+[tool.poetry]
+name = "ls-tree-py"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+keywords = ["ls", "tree"]
+authors = [
+    "Andrei Fokau <andrei@fokau.se>",
+]
+license = "MIT"
+homepage = "https://..."
+repository = "https://github.com/andreif/ls-tree-python"
+documentation = "https://..."
+classifiers = [
+#    "Topic :: Software Development :: Tools",
+#    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+packages = [
+    { include = "ls_tree", from = "src" },
+]
+include = [
+    "CHANGELOG.md",
+#    { path = "tests", format = "sdist" },
+#    { path = "for_wheel.txt", format = ["sdist", "wheel"] }
+]
+#exclude = ["my_package/excluded.py"]
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/andreif/ls-tree-python/issues"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+ls-tree = 'ls_tree.cli:run'
+#devtest = { callable = "mypackage:test.run_tests", extras = ["test"] }
+
+#[[tool.poetry.source]]
+#url = "https://pypi.fury.io/..."
+#name = "fury"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+#smth = {version = "*", source = "fury"}
+
+[tool.poetry.dev-dependencies]
+bandit = "*"
+black = "*"
+flake8 = "*"
+ipdb = "*"
+isort = "5.11.2"
+pytest = "*"
+pytest-cov = "*"
+
+#[tool.poetry.group.test.dependencies]
+#pytest = "*"
+#
+#[tool.poetry.group.docs.dependencies]
+#mkdocs = "*"
+
+[tool.poetry.extras]
+#mysql = ["mysqlclient"]
+#pgsql = ["psycopg2"]
+#databases = ["mysqlclient", "psycopg2"]
+
+# -----------------------------------------------
+
+[tool.black]
+line-length = 100
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = [
+    "E203",
+    "E501",
+    "W503"
+]
+exclude = ".venv"
+
+[tool.isort]
+profile = "black"
+src_paths = ["src", "tests"]
+namespace_packages = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7.2"
+addopts = "-vv -ra --import-mode=importlib --capture=no --no-cov-on-fail"
+#  --quiet
+testpaths = [
+    "tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "src/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+fail_under = 100
+precision = 2
+show_missing = true
+skip_covered = true
+ignore_errors = false
+exclude_lines = [
+    "pragma: no cover",
+    "if 0:",
+    "if __name__ == .__main__.:",
+]
+omit = [
+    "*/.tox/*",
+    "*/.venv/*",
+    "*/venv/*",
+    "*/python3.9/*",
+    "*/python3.10/*",
+    "*/python3.11/*",
+]
