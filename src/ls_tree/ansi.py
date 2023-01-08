@@ -77,6 +77,10 @@ class Col:
     def s(self) -> str:
         return str(self)
 
+    @property
+    def gray(self) -> str:
+        return self.black.bright
+
     def __getattr__(self, name):
         if name in self.state.__annotations__:
             return self.clone(**{name: True})

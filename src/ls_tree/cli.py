@@ -34,12 +34,12 @@ def exists(path):
 
 
 class C:
-    TREE = c.black.bright
+    TREE = c.gray
     DIR = c.bright.blue
     LINK = c.bright.purple
     EXE = c.red
     PY = c.green
-    NOISE = c.black.bright.fade
+    NOISE = c.gray.fade
     IMPORTANT = c.bright.white.bold
     RESET = c.reset
 
@@ -47,7 +47,8 @@ class C:
 def render(path: Path, root=False) -> str:
     if path.is_symlink():
         d = "/" if path.is_dir() else ""
-        return C.LINK(path.name) + "@ -> " + str(path.readlink()) + d
+        pre = c.fade if Config.IGNORE_RE.match(path.name) else c.reset
+        return pre + C.LINK(path.name) + pre("@ -> " + str(path.readlink()) + d)
     elif is_dir(path, grace=True):
         if Config.IGNORE_RE.match(path.name) and not root:
             return C.DIR.fade(path.name) + C.NOISE("/")
@@ -290,7 +291,7 @@ class Node:
                 self.write(" Hidden: " + self.hidden.render() + ".")
             if Config.COUNT_IGNORED:
                 self.write(" Total: " + self.total.render() + ".")
-            self.write("\n")
+            self.write("\n\n")
 
 
 def run(*args):
