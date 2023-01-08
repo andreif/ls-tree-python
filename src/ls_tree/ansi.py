@@ -64,9 +64,10 @@ class Col:
         return type(self)(state=self.state.clone(**kwargs))
 
     def __call__(self, text) -> str:
-        if not isinstance(text, str):
-            raise Exception(repr(text))
-        return self.s + text + self.clean.reset.s
+        if text:
+            return self.s + str(text) + self.clean.reset.s
+        else:
+            return ""
 
     @property
     def clean(self):

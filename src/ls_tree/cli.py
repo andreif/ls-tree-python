@@ -1,18 +1,21 @@
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from .ansi import c
 
-space = "    "
-line = "│   "
-tee = "├─ "
-knee = "└─ "
 
-IGNORE_RE = re.compile(r"^(\.(git|idea|venv|tox|DS_Store)|venv|__pycache__|dist)$")
-MAX_ITEMS = 1000
-MAX_ITEMS_PER_BRANCH = 25
+class Config:
+    IGNORE_RE = re.compile(
+        r"^(\.(git|idea|venv|venv_.*|tox|tox_.*|DS_Store)"
+        r"|venv|venv_.*|__pycache__|dist|node_modules|cdk.out)/?$"
+    )
+    IGNORE_IGNORED = False
+    SHOW_IGNORED = True
+    MAX_ITEMS = 1000
+    MAX_ITEMS_PER_BRANCH = 25
 
 
 def is_exe(path):
@@ -23,9 +26,9 @@ def is_py(path):
     return path.name.lower().endswith(".py")
 
 
-def is_py_pkg(path):
+def exists(path):
     try:
-        return (path / "__init__.py").exists()
+        return path.exists()
     except Exception:
         return False
 
@@ -41,20 +44,26 @@ class C:
     RESET = c.reset
 
 
-def render(path: Path) -> str:
+def render(path: Path, root=False) -> str:
     if path.is_symlink():
         d = "/" if path.is_dir() else ""
         return C.LINK(path.name) + "@ -> " + str(path.readlink()) + d
-    elif path.is_dir():
-        if IGNORE_RE.match(path.name):
-            return C.DIR.fade(path.name) + C.NOISE("/...")
-        elif is_py_pkg(path):
+    elif is_dir(path, grace=True):
+        if Config.IGNORE_RE.match(path.name) and not root:
+            return C.DIR.fade(path.name) + C.NOISE("/")
+        elif exists(path / "__init__.py"):
             return C.PY(path.name) + "/"
         else:
-            return C.DIR(path.name) + "/"
-    elif path.is_dir():
-        dots = "..." if IGNORE_RE.match(path.name) else ""
-        return C.DIR(path.name) + "/" + dots
+            extra = ""
+            if exists(path / "Dockerfile"):
+                extra += " 🐳"
+            if exists(path / "Makefile"):
+                extra += " 🛠 "
+            if exists(path / "package.json"):
+                extra += " ☕️"
+            if exists(path / "pyproject.toml"):
+                extra += " 🐍"
+            return C.DIR(path.name) + "/" + extra
     elif is_exe(path):
         return C.EXE(path.name) + "*"
     elif is_py(path):
@@ -62,76 +71,220 @@ def render(path: Path) -> str:
             return C.PY.fade(path.name)
         else:
             return C.PY(path.name[:-3]) + C.PY.fade(path.name[-3:])
-    elif IGNORE_RE.match(path.name):
+    elif Config.IGNORE_RE.match(path.name):
         return C.NOISE(path.name)
-    elif path.name in ["Makefile"]:
-        return C.IMPORTANT(path.name)
+    elif path.name == "pyproject.toml":
+        return C.PY.fade.bold(path.name)
+    elif path.name in ["Makefile"] or path.name.startswith("Dockerfile"):
+        return c.bold(path.name)
+    elif path.name == "package.json":
+        return c.yellow.fade.bold(path.name)
+    elif path.name.endswith((".js", ".ts")):
+        return c.yellow.fade(path.name)
+    elif path.name in [
+        ".gitignore",
+        ".npmignore",
+        ".python-version",
+        "poetry.lock",
+        "package-lock.json",
+    ]:
+        return C.NOISE(path.name)
     else:
         return path.name
 
 
-def is_dir(path):
-    return path.is_dir() and not path.is_symlink()
+def is_dir(path, grace=False):
+    try:
+        return path.is_dir() and not path.is_symlink()
+    except Exception:
+        if grace:
+            return False
+        else:
+            raise
 
 
-def print_tree(start_path: Path, depth: int = -1, only_dirs: bool = False):
-    count = {"dirs": 0, "files": 0}
+@dataclass
+class Count:
+    dirs: int = 0
+    files: int = 0
+    errors: int = 0
 
-    def scan_tree(dir_path: Path, depth, prefix: str = "", count_only: bool = False):
-        if depth <= 0:
-            count_only = True
+    def count(self, path):
         try:
-            items = sorted(list(dir_path.iterdir()))
-        except Exception:
-            yield C.TREE(prefix + knee) + c.red.bg("ERROR")
-            return
-        if only_dirs:
-            items = [d for d in items if d.is_dir()]
-
-        branches = (len(items) - 1) * [tee] + [knee]
-        skipped = {"dirs": 0, "files": 0}
-        last_prefix = None
-        for idx, (branch, path) in enumerate(zip(branches, items)):
-            last_prefix = C.TREE(prefix + branch)
-            show = (idx < MAX_ITEMS_PER_BRANCH) or (len(items) * 0.8 < MAX_ITEMS_PER_BRANCH)
-            if show and not count_only:
-                yield last_prefix + render(path)
-            elif is_dir(path):
-                skipped["dirs"] += 1
+            if is_dir(path):
+                self.dirs += 1
             else:
-                skipped["files"] += 1
+                self.files += 1
+        except Exception:
+            self.errors += 1
+
+    def clone(self):
+        return type(self)(**self.serialize())
+
+    def __sub__(self, other):
+        if isinstance(other, type(self)):
+            a = self.serialize()
+            b = other.serialize()
+            return type(self)(**{k: (v - b[k]) for k, v in a.items()})
+        raise NotImplementedError(type(other))
+
+    def serialize(self):
+        return {k: getattr(self, k) for k in self.__annotations__}
+
+    def sum(self):
+        return sum(self.serialize().values())
+
+    def any(self):
+        return bool(self.sum())
+
+    def render(self):
+        parts = [f"{v} {k[:-1] if v == 1 else k}" for k, v in self.serialize().items() if v]
+        if len(parts) > 2:
+            return f"{parts[0]}, {parts[1]} and {parts[2]}"
+        else:
+            return " and ".join(parts)
+
+
+class TooManyLines(Exception):
+    pass
+
+
+class Node:
+    def __init__(
+        self,
+        path: Path,
+        depth: int,
+        count_only: bool = False,
+        only_dirs: bool = False,
+        total: Count = None,
+        shown: Count = None,
+        hidden: Count = None,
+        last: bool = False,
+        parent=None,
+    ):
+        self.parent = parent
+        self.path = path if isinstance(path, Path) else Path(path)
+        self.depth = depth
+        self.count_only = count_only or depth <= 0
+        self.total = total or Count()
+        self.shown = shown or Count()
+        self.hidden = hidden or Count()
+        self.only_dirs = only_dirs
+        self.last = last
+
+    @property
+    def root(self):
+        return not self.parent
+
+    def prefix(self, sub=False, add_knee=False):
+        tab, line = "    ", "│   "
+        tee, knee = "├─ ", "└─ "
+        if self.root:
+            return "  "
+        prefix = self.parent.prefix(sub=True) if self.parent else ""
+        if sub or add_knee:
+            prefix += tab if self.last else line
+            if add_knee:
+                prefix += knee
+        else:
+            prefix += knee if self.last else tee
+        return prefix
+
+    def write(self, txt):
+        if not self.count_only:
+            print(txt, end="")
+
+    def ignored(self):
+        return Config.IGNORE_RE.match(self.path.name) and not self.root
+
+    def is_hidden(self):
+        return self.ignored() and not Config.SHOW_IGNORED
+
+    def print(self):
+        if self.root:
+            self.write("\n")
+        try:
+            if is_dir(self.path) and not (self.ignored() and Config.IGNORE_IGNORED):
+                items = sorted(list(self.path.iterdir()))  # this can fail too
+            else:
+                items = []
+        except Exception:
+            if not self.is_hidden():
+                self.write(
+                    C.TREE(self.prefix()) + render(self.path, self.root) + " " + c.red.bg(" ? ")
+                )
+            return
+        else:
+            if not self.is_hidden():
+                self.write(C.TREE(self.prefix()) + render(self.path, self.root))
+
+        finally:
+            if self.is_hidden():
+                self.hidden.count(self.path)
+            self.total.count(self.path)
+
+        if self.ignored():
+            freeze = self.total.clone()
+        else:
+            self.write("\n")
+        if not self.count_only:
+            self.shown.count(self.path)
+            if self.shown.sum() > Config.MAX_ITEMS:
+                print(f"Warning: {Config.MAX_ITEMS=} reached, aborting", file=sys.stderr)
+                if self.root:
+                    return
+                else:
+                    raise TooManyLines
+
+        skipped = Count()
+        for idx, path in enumerate(items):
+            skip = (idx > Config.MAX_ITEMS_PER_BRANCH) and (
+                len(items) * 0.8 > Config.MAX_ITEMS_PER_BRANCH
+            )
+
+            last = idx == len(items) - 1
+
+            if skip or self.count_only or self.ignored():
+                skipped.count(path)
 
             try:
-                if is_dir(path):
-                    count["dirs"] += 1
-                    yield from scan_tree(
-                        dir_path=path,
-                        depth=depth - 1,
-                        prefix=prefix + (line if branch == tee else space),
-                        count_only=count_only or IGNORE_RE.match(path.name) or not show,
-                    )
-                elif not only_dirs:
-                    count["files"] += 1
-            except Exception:
-                # print(path)
-                yield C.TREE(prefix + (line if branch == tee else space)) + c.red.bg("ERROR2")
-        if any(skipped.values()) and not count_only:
-            yield last_prefix + C.NOISE("...skipped " + render_count(skipped))
+                type(self)(
+                    path=path,
+                    depth=self.depth - 1,
+                    last=last,
+                    parent=self,
+                    count_only=self.count_only or skip or self.ignored(),
+                    total=self.total,
+                    shown=self.shown,
+                ).print()
+            except TooManyLines:
+                return
 
-    print(C.IMPORTANT(str(start_path.absolute())))
-    iterator = scan_tree(start_path, depth=depth)
-    for idx, ln in enumerate(iterator):
-        if idx < MAX_ITEMS:
-            print(ln)
-        else:
-            print(f"Warning: {MAX_ITEMS=} reached, aborting", file=sys.stderr)
-            break
+        if self.ignored():
+            if Config.SHOW_IGNORED:
+                if Config.IGNORE_IGNORED and is_dir(self.path, grace=True):
+                    self.write(C.NOISE("..."))
+                else:
+                    diff = self.total - freeze
+                    if diff.any():
+                        self.write(C.NOISE("... " + diff.render()))
+                self.write("\n")
 
-    print("\n" + render_count(count) + "\n")
+        elif not self.count_only and skipped.any():
+            self.write(
+                C.TREE(self.prefix(add_knee=True))
+                + C.NOISE("...skipped " + skipped.render())
+                + "\n"
+            )
 
-
-def render_count(count):
-    return " and ".join(f"{v} {k}" for k, v in count.items() if v)
+        elif self.root:
+            self.write("\n  Shown: " + self.shown.render() + ".")
+            if Config.IGNORE_IGNORED:
+                if self.hidden.any():
+                    self.write(" Ignored: " + self.hidden.render() + ".")
+            else:
+                self.write(" Total: " + self.total.render() + ".")
+            self.write("\n")
 
 
 def run(*args):
@@ -145,7 +298,9 @@ def run(*args):
         if re.match(r"^-\d$", arg):
             depth = int(arg[1:])
 
-    print_tree(start_path=Path(path), depth=depth)
+    Config.IGNORE_IGNORED = True
+    Config.SHOW_IGNORED = False
+    Node(path=path, depth=depth).print()
 
 
 if __name__ == "__main__":
