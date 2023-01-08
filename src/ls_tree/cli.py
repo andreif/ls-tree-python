@@ -12,8 +12,8 @@ class Config:
         r"^(\.(git|idea|venv|venv_.*|tox|tox_.*|DS_Store)"
         r"|venv|venv_.*|__pycache__|dist|node_modules|cdk.out)/?$"
     )
-    IGNORE_IGNORED = False
     SHOW_IGNORED = True
+    COUNT_IGNORED = False
     MAX_ITEMS = 1000
     MAX_ITEMS_PER_BRANCH = 25
 
@@ -55,14 +55,14 @@ def render(path: Path, root=False) -> str:
             return C.PY(path.name) + "/"
         else:
             extra = ""
-            if exists(path / "Dockerfile"):
-                extra += " 🐳"
-            if exists(path / "Makefile"):
-                extra += " 🛠 "
-            if exists(path / "package.json"):
-                extra += " ☕️"
-            if exists(path / "pyproject.toml"):
-                extra += " 🐍"
+            # if exists(path / "Dockerfile"):
+            #     extra += " 🐳"
+            # if exists(path / "Makefile"):
+            #     extra += " 🛠 "
+            # if exists(path / "package.json"):
+            #     extra += " ☕️"
+            # if exists(path / "pyproject.toml"):
+            #     extra += " 🐍"
             return C.DIR(path.name) + "/" + extra
     elif is_exe(path):
         return C.EXE(path.name) + "*"
@@ -138,7 +138,9 @@ class Count:
         return bool(self.sum())
 
     def render(self):
-        parts = [f"{v} {k[:-1] if v == 1 else k}" for k, v in self.serialize().items() if v]
+        parts = [
+            C.IMPORTANT(f"{v} {k[:-1] if v == 1 else k}") for k, v in self.serialize().items() if v
+        ]
         if len(parts) > 2:
             return f"{parts[0]}, {parts[1]} and {parts[2]}"
         else:
@@ -202,24 +204,24 @@ class Node:
 
     def print(self):
         if self.root:
-            self.write("\n")
+            rnd = "\n " + render(self.path, self.root)
+        else:
+            rnd = C.TREE(self.prefix()) + render(self.path, self.root)
         try:
-            if is_dir(self.path) and not (self.ignored() and Config.IGNORE_IGNORED):
+            if is_dir(self.path) and (not self.ignored() or Config.COUNT_IGNORED):
                 items = sorted(list(self.path.iterdir()))  # this can fail too
             else:
                 items = []
         except Exception:
             if not self.is_hidden():
-                self.write(
-                    C.TREE(self.prefix()) + render(self.path, self.root) + " " + c.red.bg(" ? ")
-                )
+                self.write(rnd + " " + c.red.bg(" ? "))
             return
         else:
             if not self.is_hidden():
-                self.write(C.TREE(self.prefix()) + render(self.path, self.root))
+                self.write(rnd)
 
         finally:
-            if self.is_hidden():
+            if self.is_hidden() and not self.count_only:
                 self.hidden.count(self.path)
             self.total.count(self.path)
 
@@ -227,8 +229,10 @@ class Node:
             freeze = self.total.clone()
         else:
             self.write("\n")
+
         if not self.count_only:
-            self.shown.count(self.path)
+            if not self.is_hidden() and not self.root:
+                self.shown.count(self.path)
             if self.shown.sum() > Config.MAX_ITEMS:
                 print(f"Warning: {Config.MAX_ITEMS=} reached, aborting", file=sys.stderr)
                 if self.root:
@@ -256,18 +260,21 @@ class Node:
                     count_only=self.count_only or skip or self.ignored(),
                     total=self.total,
                     shown=self.shown,
+                    hidden=self.hidden,
                 ).print()
             except TooManyLines:
                 return
 
         if self.ignored():
             if Config.SHOW_IGNORED:
-                if Config.IGNORE_IGNORED and is_dir(self.path, grace=True):
-                    self.write(C.NOISE("..."))
-                else:
-                    diff = self.total - freeze
-                    if diff.any():
-                        self.write(C.NOISE("... " + diff.render()))
+                if is_dir(self.path, grace=True):
+                    if Config.COUNT_IGNORED:
+                        diff = self.total - freeze
+                        if diff.any():
+                            self.write(C.NOISE("... " + diff.render()))
+                    else:
+                        # self.write(C.NOISE("..."))
+                        pass
                 self.write("\n")
 
         elif not self.count_only and skipped.any():
@@ -279,10 +286,9 @@ class Node:
 
         elif self.root:
             self.write("\n  Shown: " + self.shown.render() + ".")
-            if Config.IGNORE_IGNORED:
-                if self.hidden.any():
-                    self.write(" Ignored: " + self.hidden.render() + ".")
-            else:
+            if self.hidden.any():
+                self.write(" Hidden: " + self.hidden.render() + ".")
+            if Config.COUNT_IGNORED:
                 self.write(" Total: " + self.total.render() + ".")
             self.write("\n")
 
@@ -298,8 +304,10 @@ def run(*args):
         if re.match(r"^-\d$", arg):
             depth = int(arg[1:])
 
-    Config.IGNORE_IGNORED = True
+    # Config.COUNT_IGNORED = True
+    Config.COUNT_IGNORED = False
     Config.SHOW_IGNORED = False
+    Config.SHOW_IGNORED = True
     Node(path=path, depth=depth).print()
 
 
