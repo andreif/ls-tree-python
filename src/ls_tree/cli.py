@@ -1,5 +1,7 @@
+import datetime
 import os
 import re
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,12 +16,22 @@ class Config:
     )
     SHOW_IGNORED = True
     COUNT_IGNORED = False
-    MAX_ITEMS = 1000
-    MAX_ITEMS_PER_BRANCH = 25
+    SHOW_STAT = False
+    MAX_ITEMS = 2000
+    MAX_ITEMS_PER_BRANCH = 250
 
 
 def is_exe(path):
     return os.access(path.absolute(), os.X_OK)
+
+
+def is_exe_gid(path):
+    try:
+        s = path.stat()
+    except Exception:
+        return False
+    else:
+        return stat.filemode(s.st_mode).startswith("s")
 
 
 def is_py(path):
@@ -46,7 +58,7 @@ class C:
 
 def render(path: Path, root=False) -> str:
     if path.is_symlink():
-        d = "/" if path.is_dir() else ""
+        d = is_dir(path, grace=True, choices=("/", "", " " + c.red.bg(" ? ")))
         pre = c.fade if Config.IGNORE_RE.match(path.name) else c.reset
         return pre + C.LINK(path.name) + pre("@ -> " + str(path.readlink()) + d)
     elif is_dir(path, grace=True):
@@ -65,8 +77,13 @@ def render(path: Path, root=False) -> str:
             # if exists(path / "pyproject.toml"):
             #     extra += " 🐍"
             return C.DIR(path.name) + "/" + extra
+    elif is_exe_gid(path):
+        return c.green(path.name) + "="
     elif is_exe(path):
-        return C.EXE(path.name) + "*"
+        if is_py(path):
+            return C.PY(path.name[:-3]) + C.EXE(path.name[-3:]) + "*"
+        else:
+            return C.EXE(path.name) + "*"
     elif is_py(path):
         if path.name == "__init__.py":
             return C.PY.fade(path.name)
@@ -94,14 +111,19 @@ def render(path: Path, root=False) -> str:
         return path.name
 
 
-def is_dir(path, grace=False):
+def is_dir(path, grace=False, choices=None):
     try:
-        return path.is_dir() and not path.is_symlink()
+        result = path.is_dir() and not path.is_symlink()
     except Exception:
         if grace:
-            return False
+            if choices:
+                return choices[2]
+            else:
+                return False
         else:
             raise
+    else:
+        return (choices[0] if result else choices[1]) if choices else result
 
 
 @dataclass
@@ -139,9 +161,7 @@ class Count:
         return bool(self.sum())
 
     def render(self):
-        parts = [
-            C.IMPORTANT(f"{v} {k[:-1] if v == 1 else k}") for k, v in self.serialize().items() if v
-        ]
+        parts = [f"{v} {k[:-1] if v == 1 else k}" for k, v in self.serialize().items() if v]
         if len(parts) > 2:
             return f"{parts[0]}, {parts[1]} and {parts[2]}"
         else:
@@ -203,27 +223,77 @@ class Node:
     def is_hidden(self):
         return self.ignored() and not Config.SHOW_IGNORED
 
-    def print(self):
-        if self.root:
-            rnd = "\n " + render(self.path, self.root)
+    def stat(self):
+        if not Config.SHOW_STAT:
+            return ""
+        try:
+            s = self.path.stat()
+        except Exception:
+            return " " * 60
+        xattr = ""
+        if stat.S_ISSOCK(s.st_mode):
+            xattr = "S"
+        # else:
+        #     try:
+        #         import subprocess
+        #         xattr = subprocess.check_output(["xattr", str(self.path.absolute())])
+        #         xattr = "@" if xattr else " "
+        #     except Exception:
+        #         xattr = "?"
+        oc = str(oct(s.st_mode))
+        if oc.startswith("0o100"):  # file
+            oc = (" " * 3) + oc[5:]
+        elif oc.startswith(("0o102", "0o104")):  # setuid
+            oc = (" " * 2) + oc[4:]
+        elif oc.startswith("0o40"):  # directory
+            oc = (" " * 3) + oc[4:]
         else:
-            rnd = C.TREE(self.prefix()) + render(self.path, self.root)
+            oc = oc[2:]
+
+        def trim(t, n):
+            t = t[:5] + ".." if len(t) > n else t
+            return f"{t:7}"
+
+        return " ".join(
+            map(
+                str,
+                [
+                    oc,
+                    stat.filemode(s.st_mode) + xattr,
+                    trim(self.path.owner(), 7),
+                    trim(self.path.group(), 7),
+                    f"{s.st_size:-9}",
+                    datetime.datetime.fromtimestamp(s.st_mtime).strftime("%Y-%b-%d %H:%M"),
+                ],
+            )
+        )
+
+    def print(self):
+        if self.depth < 0 and not Config.COUNT_IGNORED:
+            return
+        post = ""
         try:
             if is_dir(self.path) and (not self.ignored() or Config.COUNT_IGNORED):
                 items = sorted(list(self.path.iterdir()))  # this can fail too
             else:
                 items = []
         except Exception:
-            if not self.is_hidden():
-                self.write(rnd + " " + c.red.bg(" ? "))
+            post = " " + c.red.bg(" ? ") + "\n"
+            # if not self.is_hidden():
+            #     self.write(rnd + " " + c.red.bg(" ? "))
             return
-        else:
-            if not self.is_hidden():
-                self.write(rnd)
-
         finally:
-            if self.is_hidden() and not self.count_only:
-                self.hidden.count(self.path)
+            if self.is_hidden():
+                if not self.count_only:
+                    self.hidden.count(self.path)
+            else:
+                if self.root:
+                    self.write("\n" + C.NOISE(self.stat()) + "  ")
+                else:
+                    self.write(C.NOISE(self.stat() + " "))
+                    self.write(C.TREE(self.prefix()))
+                self.write(render(self.path, self.root) + post)
+
             self.total.count(self.path)
 
         if self.ignored():
@@ -239,6 +309,7 @@ class Node:
                 if self.root:
                     return
                 else:
+                    exit()  # TODO
                     raise TooManyLines
 
         skipped = Count()
@@ -286,7 +357,8 @@ class Node:
             )
 
         elif self.root:
-            self.write("\n  Shown: " + self.shown.render() + ".")
+            if self.shown.any():
+                self.write("\n  Shown: " + self.shown.render() + ".")
             if self.hidden.any():
                 self.write(" Hidden: " + self.hidden.render() + ".")
             if Config.COUNT_IGNORED:
@@ -309,6 +381,7 @@ def run(*args):
     Config.COUNT_IGNORED = False
     Config.SHOW_IGNORED = False
     Config.SHOW_IGNORED = True
+    Config.SHOW_STAT = True
     Node(path=path, depth=depth).print()
 
 
