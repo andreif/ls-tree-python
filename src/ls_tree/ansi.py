@@ -24,7 +24,7 @@ class Colors:
     green = 2
     yellow = 3
     blue = 4
-    purple = 5
+    purple = magenta = 5
     cyan = 6
     white = 7
 
@@ -56,7 +56,7 @@ class State:
         return self.__class__(**{**self.serialize(), **kwargs})
 
 
-class Col:
+class Color:
     def __init__(self, state=None):
         self.state = state or State()
 
@@ -80,6 +80,12 @@ class Col:
     @property
     def gray(self) -> str:
         return self.black.bright
+
+    grey = gray
+
+    @property
+    def brown(self) -> str:
+        return self.yellow.fade
 
     def __getattr__(self, name):
         if name in self.state.__annotations__:
@@ -127,4 +133,4 @@ def esc(*mods):
         return ""
 
 
-c = Col()
+c = Color()

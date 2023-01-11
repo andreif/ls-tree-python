@@ -47,3 +47,6 @@ lint:
 
 publish:
 	venv/bin/poetry publish --build ${PYPI_AUTH}  # --dry-run
+
+py:
+	venv/bin/poetry run python

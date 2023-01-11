@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .ansi import c
+from .ls import LSCOLORS
 
 
 class Config:
@@ -25,13 +26,26 @@ def is_exe(path):
     return os.access(path.absolute(), os.X_OK)
 
 
-def is_exe_gid(path):
+def stat_(path):
     try:
-        s = path.stat()
+        return path.stat()
     except Exception:
         return False
-    else:
-        return stat.filemode(s.st_mode).startswith("s")
+
+
+def is_exe_gid(st):
+    if st:
+        return stat.filemode(st.st_mode)[6] == "s"
+
+
+def is_exe_uid(st):
+    if st:
+        return stat.filemode(st.st_mode)[3] == "s"
+
+
+def is_socket(st):
+    if st:
+        return stat.filemode(st.st_mode)[0] == "s"
 
 
 def is_py(path):
@@ -45,11 +59,9 @@ def exists(path):
         return False
 
 
+# custom colors
 class C:
     TREE = c.gray
-    DIR = c.bright.blue
-    LINK = c.bright.purple
-    EXE = c.red
     PY = c.green
     NOISE = c.gray.fade
     IMPORTANT = c.bright.white.bold
@@ -60,10 +72,10 @@ def render(path: Path, root=False) -> str:
     if path.is_symlink():
         d = is_dir(path, grace=True, choices=("/", "", " " + c.red.bg(" ? ")))
         pre = c.fade if Config.IGNORE_RE.match(path.name) else c.reset
-        return pre + C.LINK(path.name) + pre("@ -> " + str(path.readlink()) + d)
+        return pre + LSCOLORS.symbolic_link(path.name) + pre("@ -> " + str(path.readlink()) + d)
     elif is_dir(path, grace=True):
         if Config.IGNORE_RE.match(path.name) and not root:
-            return C.DIR.fade(path.name) + C.NOISE("/")
+            return LSCOLORS.directory.fade(path.name) + C.NOISE("/")
         elif exists(path / "__init__.py"):
             return C.PY(path.name) + "/"
         else:
@@ -76,14 +88,18 @@ def render(path: Path, root=False) -> str:
             #     extra += " ☕️"
             # if exists(path / "pyproject.toml"):
             #     extra += " 🐍"
-            return C.DIR(path.name) + "/" + extra
-    elif is_exe_gid(path):
-        return c.green(path.name) + "="
+            return LSCOLORS.directory(path.name) + "/" + extra
+    elif is_exe_uid(stat_(path)):
+        return LSCOLORS.executable_with_setuid(path.name) + "*"
+    elif is_exe_gid(stat_(path)):
+        return LSCOLORS.executable_with_setgid(path.name) + "*"
+    elif is_socket(stat_(path)):
+        return LSCOLORS.socket(path.name) + "="
     elif is_exe(path):
         if is_py(path):
-            return C.PY(path.name[:-3]) + C.EXE(path.name[-3:]) + "*"
+            return C.PY(path.name[:-3]) + LSCOLORS.executable(path.name[-3:]) + "*"
         else:
-            return C.EXE(path.name) + "*"
+            return LSCOLORS.executable(path.name) + "*"
     elif is_py(path):
         if path.name == "__init__.py":
             return C.PY.fade(path.name)
@@ -229,10 +245,10 @@ class Node:
         try:
             s = self.path.stat()
         except Exception:
-            return " " * 60
+            return " " * 61
         xattr = ""
-        if stat.S_ISSOCK(s.st_mode):
-            xattr = "S"
+        # if stat.S_ISSOCK(s.st_mode):
+        #     xattr = "S"
         # else:
         #     try:
         #         import subprocess
@@ -254,6 +270,24 @@ class Node:
             t = t[:5] + ".." if len(t) > n else t
             return f"{t:7}"
 
+        def time(st):
+            dt = datetime.datetime.fromtimestamp(st.st_mtime)
+            now = datetime.datetime.now()
+            if now.year != dt.year:
+                fmt = "%Y-%b-%d %H:%M"
+            elif now.month != dt.month:
+                fmt = "-----%b-%d %H:%M"
+            elif now.day != dt.day:
+                fmt = "---------%d %H:%M"
+            elif now.hour != dt.hour:
+                fmt = "----------- %H:%M"
+            elif now.minute != dt.minute:
+                fmt = "----------- --:%M"
+            else:
+                fmt = "----------- --:--"
+
+            return dt.strftime(fmt)
+
         return " ".join(
             map(
                 str,
@@ -263,7 +297,7 @@ class Node:
                     trim(self.path.owner(), 7),
                     trim(self.path.group(), 7),
                     f"{s.st_size:-9}",
-                    datetime.datetime.fromtimestamp(s.st_mtime).strftime("%Y-%b-%d %H:%M"),
+                    time(s),
                 ],
             )
         )
@@ -274,13 +308,17 @@ class Node:
         post = ""
         try:
             if is_dir(self.path) and (not self.ignored() or Config.COUNT_IGNORED):
-                items = sorted(list(self.path.iterdir()))  # this can fail too
+                try:
+                    items = sorted(list(self.path.iterdir()))  # this can fail too
+                except Exception:
+                    post = " " + c.red.bg(" ? ")
+                    raise
             else:
                 items = []
         except Exception:
-            post = " " + c.red.bg(" ? ") + "\n"
             # if not self.is_hidden():
             #     self.write(rnd + " " + c.red.bg(" ? "))
+            post += "\n"
             return
         finally:
             if self.is_hidden():

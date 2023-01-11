@@ -34,6 +34,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 ls-tree = 'ls_tree.cli:run'
+ls-colors = 'ls_tree.ls:print_colors'
 #devtest = { callable = "mypackage:test.run_tests", extras = ["test"] }
 
 #[[tool.poetry.source]]
